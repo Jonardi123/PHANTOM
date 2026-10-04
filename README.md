@@ -29,3 +29,5 @@ The `reaver` package normally provides `wash`. Your desktop needs an active grap
 PHANTOM does not collect Wi-Fi passwords, force disconnections, automate PIN guessing or run exploits.
 
 Only assess networks and devices you own or are authorized to test. Reports may contain sensitive information and are stored under `~/.local/share/phantom/reports`.
+
+Run offline regression checks with `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s tests -v`. These checks exercise command-thread handling and password estimates without scanning networks.

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """PHANTOM v1.0: local, consent-based Kali security workbench."""
 import json
+import math
 import os
 import re
 import subprocess
 import sys
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
     QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPushButton, QPlainTextEdit, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
@@ -38,6 +40,18 @@ def run_command(args, timeout=25):
     except OSError as exc:
         return 1, f'Could not start command: {exc}'
 
+def password_estimate(base, length, speed):
+    base, speed = int(base), float(speed)
+    if not 2 <= base <= 1000 or not 1 <= length <= 128 or not math.isfinite(speed) or speed <= 0:
+        raise ValueError('Invalid password estimate values')
+    possibilities = base ** length
+    # The supported search space can exceed floating-point range (1000**128).
+    years = Decimal(possibilities) / Decimal(str(speed)) / (Decimal('365.2425') * 86400)
+    return (f'Search space: {possibilities:,}\n'
+            f'Worst-case time at {speed:,.6g} guesses/s: {years:.3e} years\n'
+            f'Average (uniform random password): {years/2:.3e} years\n\n'
+            'Assumes independent, uniformly random characters. Real passwords often have patterns.')
+
 class Worker(QObject):
     done = Signal(int, str)
     def __init__(self, args, timeout):
@@ -60,6 +74,8 @@ class Pane(QWidget):
         self.busy = False
         self.thread = None
         self.worker = None
+        self._callback = None
+        self._command_label = ''
         self.last_output = ''
 
     def line(self, label, value=''):
@@ -77,19 +93,30 @@ class Pane(QWidget):
             QMessageBox.information(self, 'Already running', 'Wait for the current operation to finish.')
             return
         self.busy = True
+        self._command_label = label
         self.log.setPlainText(f'{label}\nRunning: {args[0]} (please wait)...')
         thread = QThread(self); worker = Worker(args, timeout); worker.moveToThread(thread)
         thread.started.connect(worker.work)
-        def finished(code, output):
-            self.busy = False
-            self.show_result(label, code, output)
-            if callback: callback(code, output)
-            thread.quit()
-        worker.done.connect(finished)
-        thread.finished.connect(worker.deleteLater)
+        worker.done.connect(self._command_finished)
+        worker.done.connect(worker.deleteLater)
+        thread.finished.connect(self._thread_finished)
         thread.finished.connect(thread.deleteLater)
-        self.thread, self.worker = thread, worker
+        self.thread, self.worker, self._callback = thread, worker, callback
         thread.start()
+
+    @Slot(int, str)
+    def _command_finished(self, code, output):
+        # A QObject slot receives the worker result on this pane's GUI thread.
+        try:
+            self.show_result(self._command_label, code, output)
+            if self._callback: self._callback(code, output)
+        finally:
+            self.thread.quit()
+
+    @Slot()
+    def _thread_finished(self):
+        self.busy = False
+        self.thread = self.worker = self._callback = None
 
 class Phantom(QMainWindow):
     def __init__(self):
@@ -119,6 +146,14 @@ class Phantom(QMainWindow):
         side_layout.addStretch()
         side_layout.addWidget(QLabel('Only test networks and\ndevices you control or\nhave permission to audit.'))
         self.statusBar().showMessage('Ready | No background scanning')
+
+    def closeEvent(self, event):
+        if any(pane.busy for pane in self.panes):
+            QMessageBox.information(self, 'Operation running',
+                                    'Wait for the running operation to finish before closing PHANTOM.')
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _interface(self, pane, label='Wireless adapter'):
         cb = pane.selection(label, ['wlan1', 'wlan0'])
@@ -166,18 +201,10 @@ class Phantom(QMainWindow):
         rate = p.line('Guesses per second', '4462')
         def estimate():
             try:
-                base = int(sample.text()); speed = float(rate.text())
-                if not 1 < base <= 1000 or speed <= 0: raise ValueError
-                possibilities = base ** length.value()
-                seconds = possibilities / speed
-                years = seconds / (365.2425 * 86400)
-                result = (f'Search space: {possibilities:,}\n'
-                          f'Worst-case time at {speed:,.0f} guesses/s: {years:.3e} years\n'
-                          f'Average (uniform random password): {years/2:.3e} years\n\n'
-                          'Assumes independent, uniformly random characters. Real passwords often have patterns.')
+                result = password_estimate(sample.text(), length.value(), rate.text())
                 p.show_result('Offline password-strength estimate', 0, result)
             except ValueError:
-                QMessageBox.warning(p, 'Invalid values', 'Enter a character-set size of 2–1000 and a positive speed.')
+                QMessageBox.warning(p, 'Invalid values', 'Enter a character-set size of 2–1000 and a finite positive speed.')
         p.button('Estimate random-password resistance', estimate)
         p.button('Benchmark WPA2 (CPU)', lambda: p.execute('Hashcat WPA2 benchmark',
                  ['hashcat', '-b', '-m', '22000', '-D', '1'], 180))
