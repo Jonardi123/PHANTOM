@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+*.pcap
+*.pcapng
+*.cap
+*.hc22000
+reports/
+.env
+.env.*
