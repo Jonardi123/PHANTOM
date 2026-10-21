@@ -9,7 +9,7 @@ from unittest.mock import patch
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
 
-from phantom import Pane, Phantom, password_estimate
+from phantom import Pane, Phantom, password_estimate, run_command
 
 
 class CommandTests(unittest.TestCase):
@@ -27,6 +27,26 @@ class CommandTests(unittest.TestCase):
         for _ in range(5):
             self.app.processEvents()
             time.sleep(.01)
+
+    def test_missing_command_reports_recoverable_error(self):
+        code, output = run_command(['phantom-command-that-does-not-exist-20261021'])
+        self.assertEqual(code, 127)
+        self.assertIn('Missing command:', output)
+
+    def test_timed_out_command_returns_status_instead_of_hanging(self):
+        code, output = run_command(
+            [sys.executable, '-c', 'import time; time.sleep(5)'], timeout=0.1)
+        self.assertEqual(code, 124)
+        self.assertIn('Timed out', output)
+
+    def test_nonzero_exit_preserves_combined_diagnostics(self):
+        code, output = run_command(
+            [sys.executable, '-c',
+             'import sys; print("stdout diagnostic"); '
+             'print("stderr diagnostic", file=sys.stderr); sys.exit(7)'])
+        self.assertEqual(code, 7)
+        self.assertIn('stdout diagnostic', output)
+        self.assertIn('stderr diagnostic', output)
 
     def test_results_and_callback_run_on_gui_thread(self):
         pane = Pane('Test', 'Local test command')
