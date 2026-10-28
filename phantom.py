@@ -30,7 +30,7 @@ QCheckBox {spacing:8px;}"""
 def run_command(args, timeout=25):
     """Never use a shell; commands and flags are constructed by the application."""
     try:
-        p = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        p = subprocess.run(args, text=True, errors='replace', stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            timeout=timeout, check=False, env={**os.environ, 'LC_ALL': 'C'})
         return p.returncode, p.stdout[-45000:] or '(No output)'
     except subprocess.TimeoutExpired:
